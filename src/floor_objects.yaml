@@ -1,0 +1,35 @@
+# Floor objects for sonar detection simulation
+# Agent flies at Z=3m, objects are on floor at Z=0
+
+floor_objects:
+  - name: "tire_1"
+    type: "circle"
+    position: [3, 3]  # X, Y on floor
+    radius: 0.5
+    intensity: 1.0  # Sonar return strength
+    
+  - name: "box_1"
+    type: "rectangle"
+    position: [6, 4]  # Center X, Y
+    size: [0.8, 0.6]  # Width, Height
+    intensity: 0.8
+    
+  - name: "cable_1"
+    type: "line"
+    points: [[2, 7], [8, 7.5]]  # Start, End points
+    width: 0.2
+    intensity: 0.6
+    
+  - name: "target_1"
+    type: "circle"
+    position: [7, 8]
+    radius: 0.3
+    intensity: 1.0
+
+# Sonar sensor parameters
+sonar_config:
+  altitude: 3.0  # meters above floor
+  beam_angle: 45  # degrees (cone angle)
+  resolution: 0.05  # grid resolution in meters
+  max_range: 5.0  # maximum detection range (not used for downward-looking)
+  scan_rate: 10  # Hz
