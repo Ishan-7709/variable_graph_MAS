@@ -1,0 +1,43 @@
+workPath: '~/sims/variable_graph_MAS/sims/easySingle/'
+Wksp_bnds:
+  upper:
+   - [10]
+  lower:
+   - [0]
+
+solverType: 'Euler'
+Obstacles:
+  worldType: 0
+  sphereWorld:
+    obsNum: 0
+    obsCenter: []
+    obsRadii: []
+
+pnpParameters:
+  Lazy: 0
+  coopGain: 10
+  leaderGain: 0.215
+  alpha: 1.01
+  rsafe: 0.7
+  rcomm: 3
+
+netID: 'SingleAgent'
+agentSpawn: 1
+
+Agents:
+  stateWnames: 1
+  NamesandPos:
+    - ["Zoe", [1, 1]]
+
+  tree_mat_names: []
+
+  Names:
+    - "Zoe"
+
+  AgentType:
+    - ['Zoe', "sphereNav"]
+
+  Leaders:
+    Zoe:
+      Target: [9, 9]
+      keepUpQ: False
