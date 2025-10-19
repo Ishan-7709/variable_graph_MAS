@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate 3D flight video with real-time floor mapping"""
+"""Generate 3D flight video with real-time floor mapping - FIXED ACCUMULATION"""
 
 import numpy as np
 import matplotlib
@@ -20,9 +20,9 @@ with open('/home/rosdevish/ros2_ws/src/variable_graph_MAS/src/floor_objects.yaml
 # Parameters - SLOWER SPEED
 spawn = config['Agents']['NamesandPos'][0][1]
 goal = config['Agents']['Leaders']['Zoe']['Target']
-leader_gain = 0.15  # Much slower than 0.5
+leader_gain = 0.15
 dt = 0.01
-sim_time = 60  # Longer simulation
+sim_time = 60
 
 # Initialize agent (3D)
 pos = np.array(spawn, dtype=float).reshape((3, 1))
@@ -30,11 +30,11 @@ target = np.array(goal, dtype=float).reshape((3, 1))
 constant_height = float(spawn[2])
 trajectory = [pos.flatten().copy()]
 
-# Initialize map
+# Initialize map - THIS IS THE KEY: We'll build it incrementally!
 map_size = 10.0
 map_resolution = 0.1
 grid_size = int(map_size / map_resolution)
-occupancy_grid = np.zeros((grid_size, grid_size))
+accumulated_map = np.zeros((grid_size, grid_size))  # Persistent map across frames
 
 # Sonar parameters
 sonar_altitude = floor_data['sonar_config']['altitude']
@@ -43,7 +43,7 @@ footprint_radius = sonar_altitude * np.tan(np.radians(beam_angle / 2))
 
 # Floor objects
 floor_objects = floor_data['floor_objects']
-object_height = 0.75  # meters
+object_height = 0.75
 
 def draw_cylinder_3d(ax, center, radius, height, color='gray', alpha=0.6):
     """Draw a cylinder (tire) in 3D"""
@@ -61,17 +61,17 @@ def draw_box_3d(ax, center, size, height, color='gray', alpha=0.6):
     x1, y1 = center[0] + w/2, center[1] + h/2
     
     vertices = [
-        [x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0],  # Bottom
-        [x0, y0, height], [x1, y0, height], [x1, y1, height], [x0, y1, height]  # Top
+        [x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0],
+        [x0, y0, height], [x1, y0, height], [x1, y1, height], [x0, y1, height]
     ]
     
     faces = [
-        [vertices[0], vertices[1], vertices[5], vertices[4]],  # Front
-        [vertices[2], vertices[3], vertices[7], vertices[6]],  # Back
-        [vertices[0], vertices[3], vertices[7], vertices[4]],  # Left
-        [vertices[1], vertices[2], vertices[6], vertices[5]],  # Right
-        [vertices[4], vertices[5], vertices[6], vertices[7]],  # Top
-        [vertices[0], vertices[1], vertices[2], vertices[3]]   # Bottom
+        [vertices[0], vertices[1], vertices[5], vertices[4]],
+        [vertices[2], vertices[3], vertices[7], vertices[6]],
+        [vertices[0], vertices[3], vertices[7], vertices[4]],
+        [vertices[1], vertices[2], vertices[6], vertices[5]],
+        [vertices[4], vertices[5], vertices[6], vertices[7]],
+        [vertices[0], vertices[1], vertices[2], vertices[3]]
     ]
     
     poly = Poly3DCollection(faces, alpha=alpha, facecolor=color, edgecolor='black', linewidth=0.5)
@@ -80,14 +80,10 @@ def draw_box_3d(ax, center, size, height, color='gray', alpha=0.6):
 def draw_line_3d(ax, points, width, height, color='gray', alpha=0.6):
     """Draw a line/cable in 3D"""
     p0, p1 = np.array(points[0]), np.array(points[1])
-    
-    # Draw as a series of small cylinders
     num_segments = 20
     for i in range(num_segments):
         t = i / num_segments
         center = p0 + t * (p1 - p0)
-        
-        # Create small cylinder segment
         z = np.linspace(0, height, 5)
         theta = np.linspace(0, 2 * np.pi, 10)
         theta_grid, z_grid = np.meshgrid(theta, z)
@@ -113,9 +109,11 @@ def check_detection(agent_xy, obj):
                 return True, point, obj['intensity']
     return False, None, 0
 
-# Simulate
-print("Simulating agent flight...")
+# Simulate and BUILD MAP as we go
+print("Simulating agent flight and building map...")
 steps = int(sim_time / dt)
+map_snapshots = [accumulated_map.copy()]  # Store map state at each frame
+
 for step in range(steps):
     # Navigation
     nav = target - pos
@@ -124,23 +122,26 @@ for step in range(steps):
     pos += control * dt
     pos[2] = constant_height
     
-    if step % 100 == 0:  # Sample every 100 steps for smoother video
+    if step % 100 == 0:
         trajectory.append(pos.flatten().copy())
         
-        # Sonar scan
+        # REAL-TIME SONAR SCAN - only detect what's visible NOW
         agent_xy = pos[:2, 0]
         for obj in floor_objects:
             detected, det_pos, intensity = check_detection(agent_xy, obj)
             if detected and det_pos is not None:
-                # Update map
+                # Update ACCUMULATED map
                 grid_x = int((det_pos[0] / map_size) * grid_size)
                 grid_y = int((det_pos[1] / map_size) * grid_size)
                 if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
-                    occupancy_grid[grid_y, grid_x] += intensity * 0.5
+                    accumulated_map[grid_y, grid_x] += intensity * 0.03
+        
+        # Save snapshot of map at this frame
+        map_snapshots.append(accumulated_map.copy())
 
 trajectory = np.array(trajectory)
 
-# Create figure with 3D flight and 2D map side-by-side
+# Create figure
 print(f"Creating video with {len(trajectory)} frames...")
 fig = plt.figure(figsize=(18, 8))
 
@@ -154,7 +155,7 @@ ax3d.set_ylabel('Y (m)')
 ax3d.set_zlabel('Z (m)')
 ax3d.set_title('3D Agent Flight with Floor Objects')
 
-# Draw floor objects in 3D
+# Draw floor objects
 print("Drawing floor objects...")
 for obj in floor_objects:
     if obj['type'] == 'circle':
@@ -164,12 +165,10 @@ for obj in floor_objects:
     elif obj['type'] == 'line':
         draw_line_3d(ax3d, obj['points'], obj['width'], object_height, color='gray')
 
-# Static elements
 ax3d.scatter([spawn[0]], [spawn[1]], [spawn[2]], c='green', marker='o', s=150, label='Spawn', zorder=10)
 ax3d.scatter([goal[0]], [goal[1]], [goal[2]], c='red', marker='*', s=500, label='Goal', zorder=10)
 ax3d.legend(loc='upper left')
 
-# Animated elements (3D)
 agent_scatter = ax3d.scatter([], [], [], c='purple', marker='o', s=250, zorder=10)
 traj_line, = ax3d.plot([], [], [], 'b-', alpha=0.7, linewidth=2.5, zorder=5)
 
@@ -179,42 +178,37 @@ ax2d.set_xlim(0, map_size)
 ax2d.set_ylim(0, map_size)
 ax2d.set_xlabel('X (m)')
 ax2d.set_ylabel('Y (m)')
-ax2d.set_title('Real-Time Sonar Floor Map')
+ax2d.set_title('Real-Time Sonar Floor Map (Accumulated)')
 ax2d.set_aspect('equal')
 ax2d.set_facecolor('#1a1a1a')
 
-# Plot floor objects as ground truth on map
+# Plot ground truth objects as dashed outlines
 for obj in floor_objects:
     if obj['type'] == 'circle':
-        circle = plt.Circle(obj['position'], obj['radius'], fill=False, 
-                          color='white', linestyle='--', alpha=0.4, linewidth=2)
+        circle = plt.Circle(obj['position'], obj['radius'], fill=False,
+                          color='white', linestyle='--', alpha=0.3, linewidth=1.5)
         ax2d.add_patch(circle)
-        ax2d.text(obj['position'][0], obj['position'][1], obj['name'], 
-                 color='white', fontsize=8, ha='center', alpha=0.5)
     elif obj['type'] == 'rectangle':
         rect = plt.Rectangle(
             (obj['position'][0] - obj['size'][0]/2, obj['position'][1] - obj['size'][1]/2),
-            obj['size'][0], obj['size'][1], fill=False, 
-            color='white', linestyle='--', alpha=0.4, linewidth=2
+            obj['size'][0], obj['size'][1], fill=False,
+            color='white', linestyle='--', alpha=0.3, linewidth=1.5
         )
         ax2d.add_patch(rect)
-        ax2d.text(obj['position'][0], obj['position'][1], obj['name'], 
-                 color='white', fontsize=8, ha='center', alpha=0.5)
     elif obj['type'] == 'line':
         points = np.array(obj['points'])
-        ax2d.plot(points[:, 0], points[:, 1], 'w--', alpha=0.4, linewidth=2)
+        ax2d.plot(points[:, 0], points[:, 1], 'w--', alpha=0.3, linewidth=1.5)
 
-# Map image
 colors = ['#000000', '#001a33', '#004d99', '#00ccff', '#ffff00', '#ff6600']
 cmap = LinearSegmentedColormap.from_list('sonar', colors, N=100)
 map_im = ax2d.imshow(np.zeros((grid_size, grid_size)), cmap=cmap, origin='lower',
                       extent=[0, map_size, 0, map_size], alpha=0.9, vmin=0, vmax=1)
 
-# Agent position marker and footprint on map
-footprint_circle = plt.Circle((0, 0), footprint_radius, fill=False, 
+footprint_circle = plt.Circle((0, 0), footprint_radius, fill=False,
                               color='magenta', linestyle='-', linewidth=2, alpha=0.6)
 ax2d.add_patch(footprint_circle)
-agent_marker_2d, = ax2d.plot([], [], 'mo', markersize=12, label='Agent', markeredgewidth=2, markeredgecolor='white')
+agent_marker_2d, = ax2d.plot([], [], 'mo', markersize=12, label='Agent Position', 
+                             markeredgewidth=2, markeredgecolor='white')
 ax2d.legend(loc='upper right')
 
 def update(frame):
@@ -222,26 +216,13 @@ def update(frame):
     agent_scatter._offsets3d = ([trajectory[frame, 0]], [trajectory[frame, 1]], [trajectory[frame, 2]])
     traj_line.set_data(trajectory[:frame+1, 0], trajectory[:frame+1, 1])
     traj_line.set_3d_properties(trajectory[:frame+1, 2])
-    
-    # Slow rotation for better view
     ax3d.view_init(elev=25, azim=30 + frame*0.3)
     
-    # Update map (accumulate detections up to current frame)
-    current_map = np.zeros((grid_size, grid_size))
-    for f in range(frame + 1):
-        agent_xy = trajectory[f, :2]
-        for obj in floor_objects:
-            detected, det_pos, intensity = check_detection(agent_xy, obj)
-            if detected and det_pos is not None:
-                grid_x = int((det_pos[0] / map_size) * grid_size)
-                grid_y = int((det_pos[1] / map_size) * grid_size)
-                if 0 <= grid_x < grid_size and 0 <= grid_y < grid_size:
-                    current_map[grid_y, grid_x] += intensity * 0.03
-    
-    map_normalized = np.clip(current_map / (np.max(current_map) + 1e-6), 0, 1)
+    # Update map - USE PRE-COMPUTED SNAPSHOT!
+    map_normalized = np.clip(map_snapshots[frame] / (np.max(map_snapshots[frame]) + 1e-6), 0, 1)
     map_im.set_data(map_normalized)
     
-    # Update agent position and footprint on map
+    # Update agent marker and footprint
     agent_marker_2d.set_data([trajectory[frame, 0]], [trajectory[frame, 1]])
     footprint_circle.center = (trajectory[frame, 0], trajectory[frame, 1])
     
@@ -249,10 +230,11 @@ def update(frame):
 
 print("Rendering animation...")
 anim = animation.FuncAnimation(fig, update, frames=len(trajectory),
-                              interval=100, blit=False, repeat=False)  # 100ms = 10fps
+                              interval=100, blit=False, repeat=False)
 
 writer = animation.FFMpegWriter(fps=10, bitrate=4000)
 output_path = '/home/rosdevish/ros2_ws/src/variable_graph_MAS/singleagent3d.mp4'
 anim.save(output_path, writer=writer)
 print(f"Video saved: {output_path} ({len(trajectory)/10:.1f} seconds)")
+print("Map now builds realistically - only showing what agent has scanned!")
 plt.close()
